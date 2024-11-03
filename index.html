@@ -1,0 +1,430 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>FBX to GLB Converter</title>
+    <style>
+        /* Compact and scrollable UI styles */
+        body {
+            margin: 0;
+            font-family: Arial, sans-serif;
+            overflow: hidden;
+        }
+        #container {
+            display: flex;
+            height: 100vh;
+            overflow: hidden;
+        }
+        #sidebar {
+            width: 250px;
+            background-color: #2c3e50;
+            color: #ecf0f1;
+            padding: 10px;
+            box-sizing: border-box;
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+            overflow-y: auto;
+        }
+        #sidebar h2 {
+            margin-top: 0;
+            font-size: 18px;
+        }
+        #sidebar label {
+            margin-bottom: 5px;
+            font-size: 14px;
+        }
+        #sidebar input,
+        #sidebar button,
+        #sidebar select {
+            width: 100%;
+            padding: 8px;
+            margin-bottom: 8px;
+            border: none;
+            border-radius: 5px;
+            font-size: 14px;
+        }
+        #sidebar button {
+            background-color: #3498db;
+            color: #ecf0f1;
+            cursor: pointer;
+        }
+        #sidebar button:disabled {
+            background-color: #7f8c8d;
+            cursor: not-allowed;
+        }
+        #sidebar button:hover:enabled {
+            background-color: #2980b9;
+        }
+        #errorMessage {
+            color: #e74c3c;
+            font-weight: bold;
+            display: none;
+            font-size: 14px;
+        }
+        #canvas-container {
+            flex: 1;
+            position: relative;
+        }
+        #spinner {
+            border: 6px solid #f3f3f3;
+            border-top: 6px solid #3498db;
+            border-radius: 50%;
+            width: 50px;
+            height: 50px;
+            animation: spin 1s linear infinite;
+            position: absolute;
+            left: 50%;
+            top: 50%;
+            transform: translate(-50%, -50%);
+            display: none;
+            z-index: 100;
+        }
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+        @media (max-width: 600px) {
+            #container {
+                flex-direction: column;
+            }
+            #sidebar {
+                width: 100%;
+                height: 40vh;
+            }
+            #canvas-container {
+                height: 60vh;
+            }
+        }
+    </style>
+    <!-- Import map for Three.js modules from a CDN -->
+    <script type="importmap">
+        {
+            "imports": {
+                "three": "https://cdn.jsdelivr.net/npm/three@0.149.0/build/three.module.js",
+                "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.149.0/examples/jsm/"
+            }
+        }
+    </script>
+</head>
+<body>
+    <div id="container">
+        <div id="sidebar">
+            <h2>FBX to GLB Converter</h2>
+            <label>Load FBX File:</label>
+            <input type="file" id="fileInput" accept=".fbx">
+            <label>Select Mesh:</label>
+            <select id="meshSelect" disabled></select>
+            <label>Change Material Color:</label>
+            <input type="color" id="colorPicker" disabled>
+            <label>Load Texture Image:</label>
+            <input type="file" id="textureInput" accept="image/*" disabled>
+            <label>Load Normal Map:</label>
+            <input type="file" id="normalMapInput" accept="image/*" disabled>
+            <button id="exportButton" disabled>Export as GLB</button>
+            <div id="errorMessage"></div>
+        </div>
+        <div id="canvas-container">
+            <div id="spinner"></div>
+        </div>
+    </div>
+    <script type="module">
+        import * as THREE from 'three';
+        import { FBXLoader } from 'three/addons/loaders/FBXLoader.js';
+        import { GLTFExporter } from 'three/addons/exporters/GLTFExporter.js';
+        import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+
+        // Scene, Camera, Renderer
+        const scene = new THREE.Scene();
+        scene.background = new THREE.Color(0xaaaaaa);
+
+        const camera = new THREE.PerspectiveCamera(
+            75,
+            (window.innerWidth - 250) / window.innerHeight,
+            0.1,
+            1000
+        );
+        camera.position.set(0, 2, 5);
+
+        const renderer = new THREE.WebGLRenderer({ antialias: true });
+        renderer.setSize(window.innerWidth - 250, window.innerHeight);
+        renderer.setPixelRatio(window.devicePixelRatio);
+        document.getElementById('canvas-container').appendChild(renderer.domElement);
+
+        // Controls and Lighting
+        const controls = new OrbitControls(camera, renderer.domElement);
+        controls.update();
+
+        const ambientLight = new THREE.AmbientLight(0xffffff, 0.6);
+        const directionalLight = new THREE.DirectionalLight(0xffffff, 0.8);
+        directionalLight.position.set(0, 10, 10);
+        scene.add(ambientLight, directionalLight);
+
+        // Variables
+        let meshes = [];
+        const spinner = document.getElementById('spinner');
+        const errorMessage = document.getElementById('errorMessage');
+        const meshSelect = document.getElementById('meshSelect');
+
+        // Animation Loop
+        function animate() {
+            requestAnimationFrame(animate);
+            renderer.render(scene, camera);
+        }
+        animate();
+
+        // Event Listeners
+        window.addEventListener('resize', onWindowResize);
+        document.getElementById('fileInput').addEventListener('change', onLoadFBX);
+        meshSelect.addEventListener('change', onSelectMesh);
+        document.getElementById('colorPicker').addEventListener('input', onChangeColor);
+        document.getElementById('textureInput').addEventListener('change', onLoadTexture);
+        document.getElementById('normalMapInput').addEventListener('change', onLoadNormalMap);
+        document.getElementById('exportButton').addEventListener('click', onExportGLB);
+
+        // Functions
+        function onWindowResize() {
+            const sidebarWidth = document.getElementById('sidebar').offsetWidth;
+            camera.aspect = (window.innerWidth - sidebarWidth) / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth - sidebarWidth, window.innerHeight);
+        }
+
+        function setControlsEnabled(enabled) {
+            ['colorPicker', 'textureInput', 'normalMapInput', 'exportButton', 'meshSelect'].forEach(id => {
+                document.getElementById(id).disabled = !enabled;
+            });
+        }
+
+        async function onLoadFBX(event) {
+            const file = event.target.files[0];
+            if (!file) return;
+
+            resetError();
+            showSpinner();
+            disposeCurrentModel();
+
+            try {
+                const loader = new FBXLoader();
+                const arrayBuffer = await file.arrayBuffer();
+                const model = loader.parse(arrayBuffer);
+
+                meshes = [];
+                model.traverse(child => {
+                    if (child.isMesh) {
+                        // Convert materials to standard materials
+                        child.material = convertMaterial(child.material);
+                        meshes.push(child);
+                    }
+                });
+
+                if (meshes.length === 0) throw new Error('No meshes found in the FBX file.');
+
+                populateMeshSelect();
+                onSelectMesh();
+                setControlsEnabled(true);
+            } catch (error) {
+                showError('Failed to load model: ' + error.message);
+            } finally {
+                hideSpinner();
+            }
+        }
+
+        function populateMeshSelect() {
+            meshSelect.innerHTML = '';
+            meshes.forEach((mesh, index) => {
+                const option = document.createElement('option');
+                option.value = index;
+                option.textContent = mesh.name || `Mesh ${index + 1}`;
+                meshSelect.appendChild(option);
+            });
+        }
+
+        function onSelectMesh() {
+            // Remove all meshes from the scene
+            meshes.forEach(mesh => scene.remove(mesh));
+
+            // Add the selected mesh
+            const selectedMesh = meshes[meshSelect.value];
+            if (selectedMesh) {
+                scene.add(selectedMesh);
+
+                // Adjust camera and controls
+                const box = new THREE.Box3().setFromObject(selectedMesh);
+                const size = box.getSize(new THREE.Vector3());
+                const center = box.getCenter(new THREE.Vector3());
+
+                const maxDim = Math.max(size.x, size.y, size.z);
+                const fov = camera.fov * (Math.PI / 180);
+                let cameraZ = Math.abs(maxDim / 2 / Math.tan(fov / 2));
+
+                cameraZ *= 2; // Add some extra space
+
+                camera.position.set(center.x, center.y, center.z + cameraZ);
+                camera.near = cameraZ / 100;
+                camera.far = cameraZ * 100;
+                camera.updateProjectionMatrix();
+
+                controls.target.copy(center);
+                controls.update();
+            }
+        }
+
+        function onChangeColor(event) {
+            const selectedMesh = meshes[meshSelect.value];
+            if (selectedMesh) {
+                selectedMesh.material.color.set(event.target.value);
+                selectedMesh.material.needsUpdate = true;
+            }
+        }
+
+        async function onLoadTexture(event) {
+            const file = event.target.files[0];
+            if (!file) return;
+
+            const selectedMesh = meshes[meshSelect.value];
+            if (!selectedMesh) return;
+
+            try {
+                const texture = await loadTexture(file);
+                selectedMesh.material.map = texture;
+                selectedMesh.material.needsUpdate = true;
+            } catch (err) {
+                showError('Failed to load texture: ' + err.message);
+            }
+        }
+
+        async function onLoadNormalMap(event) {
+            const file = event.target.files[0];
+            if (!file) return;
+
+            const selectedMesh = meshes[meshSelect.value];
+            if (!selectedMesh) return;
+
+            try {
+                const normalMap = await loadTexture(file);
+                selectedMesh.material.normalMap = normalMap;
+                selectedMesh.material.needsUpdate = true;
+            } catch (err) {
+                showError('Failed to load normal map: ' + err.message);
+            }
+        }
+
+        function onExportGLB() {
+            showSpinner();
+
+            const selectedMesh = meshes[meshSelect.value];
+            if (!selectedMesh) {
+                alert('Please select a mesh to export.');
+                hideSpinner();
+                return;
+            }
+
+            // Clone the selected mesh
+            const clonedMesh = selectedMesh.clone(true);
+
+            // Convert materials to standard materials
+            clonedMesh.material = convertMaterial(clonedMesh.material);
+
+            // Create a new scene and add the cloned mesh
+            const exportScene = new THREE.Scene();
+            exportScene.add(clonedMesh);
+
+            const exporter = new GLTFExporter();
+
+            exporter.parse(
+                exportScene,
+                result => {
+                    saveArrayBuffer(result, 'model.glb');
+                    hideSpinner();
+                },
+                error => {
+                    showError('An error occurred during GLB export: ' + error);
+                    hideSpinner();
+                },
+                { binary: true }
+            );
+        }
+
+        function saveArrayBuffer(buffer, filename) {
+            const blob = new Blob([buffer], { type: 'application/octet-stream' });
+            const link = document.createElement('a');
+            link.href = URL.createObjectURL(blob);
+            link.download = filename;
+            link.click();
+            URL.revokeObjectURL(link.href);
+        }
+
+        function disposeCurrentModel() {
+            if (meshes.length > 0) {
+                meshes.forEach(mesh => {
+                    scene.remove(mesh);
+                    mesh.geometry.dispose();
+                    disposeMaterial(mesh.material);
+                });
+                meshes = [];
+            }
+        }
+
+        function disposeMaterial(material) {
+            if (Array.isArray(material)) {
+                material.forEach(mat => disposeMaterial(mat));
+            } else {
+                if (material.map) material.map.dispose();
+                if (material.normalMap) material.normalMap.dispose();
+                material.dispose();
+            }
+        }
+
+        function showSpinner() { spinner.style.display = 'block'; }
+        function hideSpinner() { spinner.style.display = 'none'; }
+        function showError(message) {
+            errorMessage.textContent = message;
+            errorMessage.style.display = 'block';
+        }
+        function resetError() {
+            errorMessage.textContent = '';
+            errorMessage.style.display = 'none';
+        }
+
+        function convertMaterial(material) {
+            // Convert materials to MeshStandardMaterial for GLTF compatibility
+            if (Array.isArray(material)) {
+                return material.map(mat => convertMaterial(mat));
+            } else {
+                const newMaterial = new THREE.MeshStandardMaterial({
+                    color: material.color ? material.color.clone() : new THREE.Color(0xffffff),
+                    map: material.map || null,
+                    normalMap: material.normalMap || null,
+                    metalness: material.metalness !== undefined ? material.metalness : 0.5,
+                    roughness: material.roughness !== undefined ? material.roughness : 0.5,
+                    transparent: material.transparent,
+                    opacity: material.opacity,
+                    side: material.side,
+                });
+                return newMaterial;
+            }
+        }
+
+        function loadTexture(file) {
+            return new Promise((resolve, reject) => {
+                const url = URL.createObjectURL(file);
+                const textureLoader = new THREE.TextureLoader();
+                textureLoader.load(
+                    url,
+                    texture => {
+                        URL.revokeObjectURL(url);
+                        texture.flipY = false; // GLTF format expects UVs with origin at lower-left corner
+                        resolve(texture);
+                    },
+                    undefined,
+                    err => {
+                        URL.revokeObjectURL(url);
+                        reject(err);
+                    }
+                );
+            });
+        }
+    </script>
+</body>
+</html>
